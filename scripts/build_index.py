@@ -43,7 +43,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--out-meta", type=Path, default=DEFAULT_META, help="Output path for metadata JSON"
     )
     parser.add_argument(
-        "--model", choices=["hog", "cnn"], default="hog", help="face_recognition model"
+        "--model",
+        choices=["hog", "cnn"],
+        default="hog",
+        help="face_recognition model (hog works on CPUs, cnn expects a GPU)",
     )
     parser.add_argument(
         "--metric", choices=["cosine", "l2"], default="l2", help="Similarity metric"
