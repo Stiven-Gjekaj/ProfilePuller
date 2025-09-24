@@ -73,7 +73,7 @@ format. HTTP 429 responses trigger a polite exponential backoff.
 
 ```bash
 python scripts/random_profile_collector.py --domain https://fiber.al/ --max-profiles 200 \
-    --out random_profiles.txt --obey-robots
+    --out profiles.txt --obey-robots
 ```
 
 - Crawls a single domain, following in-domain links and heuristically recognising profile pages.
@@ -94,7 +94,7 @@ Example combining the random slug generator with post harvesting:
 
 ```bash
 python scripts/random_profile_collector.py --include-posts --random-profile-attempts 250 \
-    --random-post-attempts 150 --out random_profiles.txt --obey-robots
+    --random-post-attempts 150 --out profiles.txt --obey-robots
 ```
 
 ## Embedding & indexing
