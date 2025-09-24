@@ -1,0 +1,18 @@
+# Python cache and virtual environments
+__pycache__/
+.venv/
+
+# OS artifacts
+.DS_Store
+
+# Binary artifacts
+*.bin
+*.lock
+*.log
+*.cache
+*.mp4
+*.avi
+
+# FAISS index artifacts
+faiss_index.bin
+faiss_meta.json

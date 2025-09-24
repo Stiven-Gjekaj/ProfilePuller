@@ -1,25 +1,63 @@
-from typing import List, Tuple
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+
 import numpy as np
-import face_recognition as fr
 
-def image_to_embeddings(path: str, model: str = "hog") -> List[np.ndarray]:
-    """
-    Returns a list of 128-d float32 face embeddings for all faces in the image.
-    model: "hog" (fast, CPU) or "cnn" (slower, better; requires dlib with CUDA to be fast)
-    """
-    img = fr.load_image_file(path)
-    boxes = fr.face_locations(img, model=model)
-    encs = fr.face_encodings(img, boxes)  # float64
-    return [e.astype("float32") for e in encs]
+FAKE_EMB = os.getenv("FAKE_EMB", "0") == "1"
 
-def encode_one_face(path: str, model: str = "hog") -> np.ndarray:
-    """Encode first detected face; raise if none."""
-    embs = image_to_embeddings(path, model=model)
-    if not embs:
+if not FAKE_EMB:
+    try:  # pragma: no cover - import guarded by FAKE_EMB in tests
+        import face_recognition as fr
+    except ImportError as exc:  # pragma: no cover - better error for missing dep
+        raise ImportError(
+            "face_recognition is required for real embeddings. "
+            "Set FAKE_EMB=1 for deterministic test embeddings."
+        ) from exc
+else:  # pragma: no cover - exercised indirectly in tests
+    fr = None
+
+
+def _fake_embedding(path: Path) -> np.ndarray:
+    """Create a deterministic 128-d vector based on the file path."""
+    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).digest()
+    # Repeat digest to reach 128 values, then normalise to [0, 1].
+    repeated = (digest * ((128 // len(digest)) + 1))[:128]
+    arr = np.frombuffer(repeated, dtype=np.uint8).astype(np.float32)
+    return arr / 255.0
+
+
+def image_to_embeddings(path: str | Path, model: str = "hog") -> list[np.ndarray]:
+    """Return a list of embeddings for every detected face in ``path``."""
+    image_path = Path(path)
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image not found: {image_path}")
+    if FAKE_EMB:
+        return [_fake_embedding(image_path)]
+
+    if fr is None:  # pragma: no cover - safety net
+        raise RuntimeError("face_recognition library failed to import")
+
+    image = fr.load_image_file(str(image_path))
+    boxes = fr.face_locations(image, model=model)
+    encodings = fr.face_encodings(image, boxes)
+    return [np.asarray(encoding, dtype=np.float32) for encoding in encodings]
+
+
+def encode_one_face(path: str | Path, model: str = "hog") -> np.ndarray:
+    """Return the first detected face embedding or raise if none are found."""
+    embeddings = image_to_embeddings(path, model=model)
+    if not embeddings:
         raise ValueError(f"No face found in image: {path}")
-    return embs[0]
+    return embeddings[0]
 
-def l2_normalize(X: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    """Normalize rows to unit length for cosine similarity via inner product."""
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
-    return X / np.maximum(norms, eps)
+
+def l2_normalize(vectors: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """Normalise each row of ``vectors`` to unit length."""
+    arr = np.asarray(vectors, dtype=np.float32)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    return arr / np.maximum(norms, eps)
