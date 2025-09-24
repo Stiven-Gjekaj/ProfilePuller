@@ -140,6 +140,8 @@ uses `FAKE_EMB=1`, keeping the pipeline lightweight while the real code paths re
 
 ## Changelog
 
+- **v1.2** – Trimmed the toolkit to focus on the core avatar indexing workflow, removed the
+  experimental random profile collector, and dropped its unused Playwright/aiohttp dependencies.
 - **v1.1** – Complete tooling overhaul: added Rich logging, retries, progress bars, fake embedding
   mode, FAISS metadata, CLI polish, Makefile helpers, tests, and cross-platform CI.
 - **v1.0** – Initial script for downloading avatars from `og:image` / `twitter:image` metadata.

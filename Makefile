@@ -3,7 +3,7 @@ PYTHON ?= python3
 .PHONY: setup build-index query
 
 setup:
-$(PYTHON) - <<'PYCODE'
+	$(PYTHON) - <<'PYCODE'
 import os
 import pathlib
 import subprocess
@@ -24,10 +24,10 @@ print(f'Environment ready. Activate with: {activate_hint}')
 PYCODE
 
 build-index:
-$(PYTHON) scripts/build_index.py --known faces/known --out-index faiss_index.bin --out-meta faiss_meta.json
+	$(PYTHON) scripts/build_index.py --known faces/known --out-index faiss_index.bin --out-meta faiss_meta.json
 
 query:
-$(PYTHON) - <<'PYCODE'
+	$(PYTHON) - <<'PYCODE'
 import subprocess
 import sys
 from pathlib import Path
