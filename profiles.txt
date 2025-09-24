@@ -1,3 +1,0 @@
-# Sample profile URLs. Remove the leading '#' to activate.
-# https://example.com/alice
-# https://twitter.com/bob

@@ -43,10 +43,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--out-meta", type=Path, default=DEFAULT_META, help="Output path for metadata JSON"
     )
     parser.add_argument(
-        "--model", choices=["hog", "cnn"], default="hog", help="face_recognition model"
+        "--model", choices=["hog", "cnn"], default="cnn", help="face_recognition model"
     )
     parser.add_argument(
-        "--metric", choices=["cosine", "l2"], default="cosine", help="Similarity metric"
+        "--metric", choices=["cosine", "l2"], default="l2", help="Similarity metric"
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
     return parser.parse_args(argv)
