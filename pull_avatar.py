@@ -18,7 +18,7 @@ def guess_ext_from_ctype(ctype: str) -> str:
 def sanitize_name(name: str) -> str:
     name = re.sub(r"[^\w\.-]+", "_", name.strip())
     name = name.strip("._")
-    return name or "avatar"
+    return name or "face"
 
 def save_image(img_url: str, outdir: str, headers: dict, timeout: int, basename_hint: str = "") -> str:
     r = SESSION.get(img_url, headers=headers, timeout=timeout, stream=True, allow_redirects=True)
@@ -80,7 +80,7 @@ def process_single_url(url: str, outdir: str, headers: dict, timeout: int, skip_
             return (url, "no og:image / twitter:image found (page may be private, JS-rendered, or blocked)")
 
         # derive a helpful basename hint from host + maybe last path part
-        hint = sanitize_name((urlparse(url).netloc or "avatar") + "_" + (os.path.basename(urlparse(url).path) or ""))
+        hint = sanitize_name((urlparse(url).netloc or "face") + "_" + (os.path.basename(urlparse(url).path) or ""))
         dest_name = hint if os.path.splitext(hint)[1] else hint + os.path.splitext(urlparse(img).path)[1]
         dest_path = os.path.join(outdir, dest_name)
         if skip_existing and os.path.exists(dest_path):
@@ -112,7 +112,7 @@ def main():
     ap = argparse.ArgumentParser(description="Fetch profile pictures via public og:image/twitter:image (no login).")
     ap.add_argument("targets", nargs="*", help="One or more profile URLs (ignored if --from-file is used).")
     ap.add_argument("--from-file", help="Path to .txt containing profile URLs (one per line).")
-    ap.add_argument("--out", default="avatars", help="Output directory (default: avatars)")
+    ap.add_argument("--out", default="faces/known", help="Output directory (default: faces/known)")
     ap.add_argument("--concurrency", type=int, default=6, help="Parallel workers (default: 6)")
     ap.add_argument("--timeout", type=int, default=15, help="HTTP timeout seconds (default: 15)")
     ap.add_argument("--limit", type=int, help="Only process the first N URLs")

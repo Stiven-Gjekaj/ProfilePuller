@@ -6,6 +6,7 @@ It works by scanning each page for `og:image` or `twitter:image` metadata, or by
 ⚠️ This script is designed for **public pages only**. It will not bypass logins, captchas, or private APIs. Use responsibly and within each platform’s Terms of Service.
 
 ## Features
+
 - Download a single avatar by passing a URL
 - Batch mode with `--from-file profiles.txt`
 - Parallel downloads with adjustable concurrency
@@ -14,11 +15,13 @@ It works by scanning each page for `og:image` or `twitter:image` metadata, or by
 - Limit the number of URLs processed with `--limit`
 
 ## Requirements
+
 Install dependencies with:
 
     pip install -r requirements.txt
 
 Dependencies:
+
 - `requests`
 - `beautifulsoup4`
 
@@ -47,4 +50,5 @@ Custom output directory, skip existing files, and 8 workers:
     https://cdn.somesite.com/u/avatar.png
 
 ## License
+
 See [LICENSE](LICENSE) for details.
