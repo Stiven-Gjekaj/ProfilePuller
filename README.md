@@ -25,6 +25,7 @@ make query
 ```
 
 ### Manual environment setup
+
 If `make` is unavailable you can run the equivalent commands manually:
 
 ```bash
@@ -34,6 +35,7 @@ pip install -r requirements.txt
 ```
 
 ## Directory layout
+
 ```
 .
 ├── faces/
