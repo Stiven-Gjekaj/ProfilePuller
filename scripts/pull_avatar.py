@@ -1,159 +1,371 @@
 #!/usr/bin/env python3
-import argparse, concurrent.futures as futures, os, re, sys, time
-from urllib.parse import urlparse, urljoin
-import requests
-from bs4 import BeautifulSoup
+from __future__ import annotations
 
+import argparse
+from collections.abc import Iterable
+import concurrent.futures as futures
+from pathlib import Path
+import re
+import sys
+import time
+import traceback
+import unicodedata
+from urllib.parse import urljoin, urlparse
+
+from bs4 import BeautifulSoup
+import requests
+from rich.console import Console
+
+console = Console()
 DEFAULT_UA = "Mozilla/5.0 (compatible; avatar-batch-fetcher/1.1)"
-SESSION = requests.Session()
+
+
+def sanitize_name(name: str) -> str:
+    """Return a filesystem-safe filename component."""
+    normalized = unicodedata.normalize("NFKC", name)
+    normalized = normalized.replace("/", "_").replace("\\", "_")
+    normalized = re.sub(r"\s+", "_", normalized)
+    sanitized = re.sub(r"[^0-9A-Za-z._-]", "_", normalized)
+    sanitized = sanitized.strip("._")
+    return sanitized or "face"
+
 
 def guess_ext_from_ctype(ctype: str) -> str:
     ctype = (ctype or "").lower()
-    if "png" in ctype: return ".png"
-    if "webp" in ctype: return ".webp"
-    if "gif" in ctype: return ".gif"
-    if "jpeg" in ctype or "jpg" in ctype: return ".jpg"
+    if "png" in ctype:
+        return ".png"
+    if "webp" in ctype:
+        return ".webp"
+    if "gif" in ctype:
+        return ".gif"
+    if "jpeg" in ctype or "jpg" in ctype:
+        return ".jpg"
     return ".jpg"
 
-def sanitize_name(name: str) -> str:
-    name = re.sub(r"[^\w\.-]+", "_", name.strip())
-    name = name.strip("._")
-    return name or "face"
 
-def save_image(img_url: str, outdir: str, headers: dict, timeout: int, basename_hint: str = "") -> str:
-    r = SESSION.get(img_url, headers=headers, timeout=timeout, stream=True, allow_redirects=True)
-    r.raise_for_status()
-    ext = guess_ext_from_ctype(r.headers.get("Content-Type", ""))
-    # filename from URL path or hint
-    path_part = sanitize_name(os.path.basename(urlparse(img_url).path)) or sanitize_name(basename_hint)
-    if not os.path.splitext(path_part)[1]:
-        path_part += ext
-    os.makedirs(outdir, exist_ok=True)
-    path = os.path.join(outdir, path_part)
-    with open(path, "wb") as f:
-        for chunk in r.iter_content(8192):
-            f.write(chunk)
+def request_with_retries(
+    session: requests.Session,
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout: int,
+    verify_ssl: bool,
+    retries: int,
+    sleep_base: float,
+    verbose: bool,
+) -> requests.Response:
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            response = session.get(
+                url,
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=True,
+                stream=True,
+                verify=verify_ssl,
+            )
+            if response.status_code == 429:
+                if attempt < retries:
+                    wait = max(sleep_base, 1.0) * (attempt + 1)
+                    console.print(f"[yellow]429 Too Many Requests from {url}; sleeping {wait:.1f}s")
+                    time.sleep(wait)
+                    continue
+            response.raise_for_status()
+            return response
+        except requests.HTTPError as exc:
+            last_exc = exc
+            status = getattr(exc.response, "status_code", "?")
+            if status == 429 and attempt < retries:
+                wait = max(sleep_base, 1.0) * (attempt + 1)
+                console.print(f"[yellow]Retrying {url} after 429 in {wait:.1f}s")
+                time.sleep(wait)
+                continue
+            if verbose:
+                console.print(traceback.format_exc())
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < retries:
+                wait = max(sleep_base, 1.0) * (attempt + 1)
+                console.print(f"[yellow]Network issue fetching {url}; retrying in {wait:.1f}s")
+                time.sleep(wait)
+                continue
+            if verbose:
+                console.print(traceback.format_exc())
+        break
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"Failed to fetch {url}")
+
+
+def save_image(
+    session: requests.Session,
+    img_url: str,
+    outdir: Path,
+    headers: dict[str, str],
+    timeout: int,
+    verify_ssl: bool,
+    retries: int,
+    sleep_base: float,
+    basename_hint: str = "",
+    verbose: bool = False,
+) -> Path:
+    response = request_with_retries(
+        session,
+        img_url,
+        headers=headers,
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+        retries=retries,
+        sleep_base=sleep_base,
+        verbose=verbose,
+    )
+    ext = guess_ext_from_ctype(response.headers.get("Content-Type", ""))
+    path_part = sanitize_name(Path(urlparse(img_url).path).name or basename_hint)
+    if not Path(path_part).suffix:
+        path_part = f"{path_part}{ext}"
+    path = outdir / path_part
+    outdir.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as fh:
+        for chunk in response.iter_content(chunk_size=8192):
+            fh.write(chunk)
+    response.close()
     return path
 
-def find_og_image(profile_url: str, headers: dict, timeout: int) -> str | None:
-    resp = SESSION.get(profile_url, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-    for key in [
+
+def find_og_image(
+    session: requests.Session,
+    profile_url: str,
+    headers: dict[str, str],
+    timeout: int,
+    verify_ssl: bool,
+    retries: int,
+    sleep_base: float,
+    verbose: bool,
+) -> str | None:
+    response = request_with_retries(
+        session,
+        profile_url,
+        headers=headers,
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+        retries=retries,
+        sleep_base=sleep_base,
+        verbose=verbose,
+    )
+    soup = BeautifulSoup(response.text, "html.parser")
+    for attr, value in [
         ("property", "og:image"),
         ("name", "og:image"),
         ("name", "twitter:image"),
         ("property", "twitter:image"),
     ]:
-        tag = soup.find("meta", attrs={key[0]: key[1]})
+        tag = soup.find("meta", attrs={attr: value})
         if tag and tag.get("content"):
             content = tag["content"].strip()
-            # Some sites use relative paths
             return urljoin(profile_url, content)
     return None
+
 
 def is_direct_image_url(url: str) -> bool:
     path = urlparse(url).path.lower()
     return any(path.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp"))
 
-def process_single_url(url: str, outdir: str, headers: dict, timeout: int, skip_existing: bool, sleep_between: float) -> tuple[str, str | None]:
-    """Returns (url, saved_path or error_message)."""
+
+def process_single_url(
+    url: str,
+    outdir: Path,
+    headers: dict[str, str],
+    timeout: int,
+    skip_existing: bool,
+    sleep_between: float,
+    verify_ssl: bool,
+    retries: int,
+    verbose: bool,
+) -> tuple[str, str | None, bool]:
+    """Return (url, message_or_path, success)."""
+    session = requests.Session()
     try:
         url = url.strip()
         if not url:
-            return (url, "empty line")
+            return url, "empty line", False
 
-        # quick path: direct image URL
         if is_direct_image_url(url):
-            dest_name = sanitize_name(os.path.basename(urlparse(url).path))
-            dest_path = os.path.join(outdir, dest_name)
-            if skip_existing and os.path.exists(dest_path):
-                return (url, f"skipped (exists: {dest_path})")
-            saved = save_image(url, outdir, headers, timeout)
+            filename = sanitize_name(Path(urlparse(url).path).name)
+            if not Path(filename).suffix:
+                filename += Path(urlparse(url).path).suffix or ".jpg"
+            dest_path = outdir / filename
+            if skip_existing and dest_path.exists():
+                return url, f"skipped (exists: {dest_path})", False
+            saved_path = save_image(
+                session,
+                url,
+                outdir,
+                headers,
+                timeout,
+                verify_ssl,
+                retries,
+                sleep_between,
+                basename_hint=filename,
+                verbose=verbose,
+            )
             if sleep_between > 0:
                 time.sleep(sleep_between)
-            return (url, saved)
+            return url, str(saved_path), True
 
-        # general page: look for og:image/twitter:image
-        img = find_og_image(url, headers, timeout)
-        if not img:
-            return (url, "no og:image / twitter:image found (page may be private, JS-rendered, or blocked)")
+        img_url = find_og_image(
+            session,
+            url,
+            headers,
+            timeout,
+            verify_ssl,
+            retries,
+            sleep_between,
+            verbose,
+        )
+        if not img_url:
+            return url, "no og:image / twitter:image found", False
 
-        # derive a helpful basename hint from host + maybe last path part
-        hint = sanitize_name((urlparse(url).netloc or "face") + "_" + (os.path.basename(urlparse(url).path) or ""))
-        dest_name = hint if os.path.splitext(hint)[1] else hint + os.path.splitext(urlparse(img).path)[1]
-        dest_path = os.path.join(outdir, dest_name)
-        if skip_existing and os.path.exists(dest_path):
-            return (url, f"skipped (exists: {dest_path})")
+        parsed = urlparse(url)
+        hint = sanitize_name(f"{parsed.netloc}_{Path(parsed.path).stem}")
+        if not Path(hint).suffix:
+            ext = Path(urlparse(img_url).path).suffix or ""
+            hint = f"{hint}{ext}"
+        dest_path = outdir / hint
+        if skip_existing and dest_path.exists():
+            return url, f"skipped (exists: {dest_path})", False
 
-        saved = save_image(img, outdir, headers, timeout, basename_hint=hint)
+        saved_path = save_image(
+            session,
+            img_url,
+            outdir,
+            headers,
+            timeout,
+            verify_ssl,
+            retries,
+            sleep_between,
+            basename_hint=hint,
+            verbose=verbose,
+        )
         if sleep_between > 0:
             time.sleep(sleep_between)
-        return (url, saved)
-    except requests.HTTPError as e:
-        return (url, f"HTTP error: {e}")
-    except requests.RequestException as e:
-        return (url, f"network error: {e}")
-    except Exception as e:
-        return (url, f"error: {e}")
+        return url, str(saved_path), True
+    except requests.HTTPError as exc:
+        message = f"HTTP error: {exc}"
+        if verbose:
+            message += f"\n{traceback.format_exc()}"
+        return url, message, False
+    except requests.RequestException as exc:
+        message = f"network error: {exc}"
+        if verbose:
+            message += f"\n{traceback.format_exc()}"
+        return url, message, False
+    except Exception as exc:  # pragma: no cover - defensive
+        message = f"error: {exc}"
+        if verbose:
+            message += f"\n{traceback.format_exc()}"
+        return url, message, False
+    finally:
+        session.close()
 
-def read_urls_from_file(path: str) -> list[str]:
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        lines = [ln.strip() for ln in f.readlines()]
-    # dedupe while preserving order
-    seen, out = set(), []
-    for ln in lines:
-        if ln and not ln.startswith("#") and ln not in seen:
-            seen.add(ln)
-            out.append(ln)
-    return out
 
-def main():
-    ap = argparse.ArgumentParser(description="Fetch profile pictures via public og:image/twitter:image (no login).")
-    ap.add_argument("targets", nargs="*", help="One or more profile URLs (ignored if --from-file is used).")
-    ap.add_argument("--from-file", help="Path to .txt containing profile URLs (one per line).")
-    ap.add_argument("--out", default="faces/known", help="Output directory (default: faces/known)")
-    ap.add_argument("--concurrency", type=int, default=6, help="Parallel workers (default: 6)")
-    ap.add_argument("--timeout", type=int, default=15, help="HTTP timeout seconds (default: 15)")
-    ap.add_argument("--limit", type=int, help="Only process the first N URLs")
-    ap.add_argument("--user-agent", default=DEFAULT_UA, help="Custom User-Agent string")
-    ap.add_argument("--skip-existing", action="store_true", help="Skip downloads if target file already exists")
-    ap.add_argument("--sleep", type=float, default=0.0, help="Sleep seconds between downloads per worker (politeness)")
-    args = ap.parse_args()
+def read_urls_from_file(path: Path) -> list[str]:
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    seen = set()
+    urls: list[str] = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line not in seen:
+            seen.add(line)
+            urls.append(line)
+    return urls
 
+
+def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Fetch profile pictures via public og:image/twitter:image (no login)."
+    )
+    parser.add_argument("targets", nargs="*", help="Profile URLs (ignored if --from-file is used)")
+    parser.add_argument("--from-file", type=Path, help="Path to .txt containing profile URLs")
+    parser.add_argument("--out", type=Path, default=Path("faces/known"), help="Output directory")
+    parser.add_argument("--concurrency", type=int, default=6, help="Parallel workers")
+    parser.add_argument("--timeout", type=int, default=15, help="HTTP timeout seconds")
+    parser.add_argument("--limit", type=int, help="Only process the first N URLs")
+    parser.add_argument("--user-agent", default=DEFAULT_UA, help="Custom User-Agent string")
+    parser.add_argument("--skip-existing", action="store_true", help="Skip existing files")
+    parser.add_argument("--sleep", type=float, default=0.0, help="Sleep seconds between downloads")
+    parser.add_argument("--retries", type=int, default=2, help="Number of retries on failure")
+    parser.add_argument(
+        "--verify-ssl",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Verify SSL certificates (use --no-verify-ssl to disable)",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
+    return parser.parse_args(argv)
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    args = parse_args(argv)
     headers = {"User-Agent": args.user_agent}
 
-    urls = []
+    urls: list[str] = []
     if args.from_file:
-        if not os.path.exists(args.from_file):
-            sys.exit(f"missing file: {args.from_file}")
+        if not args.from_file.exists():
+            console.print(f"[red]missing file: {args.from_file}")
+            return 1
         urls.extend(read_urls_from_file(args.from_file))
     urls.extend(args.targets)
 
-    if args.limit:
-        urls = urls[:args.limit]
+    if args.limit is not None:
+        urls = urls[: args.limit]
 
     if not urls:
-        sys.exit("No URLs provided. Pass targets or --from-file file.txt")
+        console.print("[red]No URLs provided. Pass targets or --from-file file.txt")
+        return 1
 
-    os.makedirs(args.out, exist_ok=True)
+    args.out.mkdir(parents=True, exist_ok=True)
 
-    successes, failures = 0, 0
-    results = []
-    with futures.ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as ex:
-        jobs = [ex.submit(process_single_url, u, args.out, headers, args.timeout, args.skip_existing, args.sleep) for u in urls]
-        for job in futures.as_completed(jobs):
-            url, outcome = job.result()
-            if outcome and os.path.exists(outcome):
-                successes += 1
-                print(f"[OK] {url} -> {outcome}")
-            else:
-                failures += 1
-                print(f"[!!] {url} -> {outcome}")
-            results.append((url, outcome))
+    successes = 0
+    failures = 0
+    try:
+        with futures.ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as executor:
+            jobs = [
+                executor.submit(
+                    process_single_url,
+                    url,
+                    args.out,
+                    headers,
+                    args.timeout,
+                    args.skip_existing,
+                    args.sleep,
+                    args.verify_ssl,
+                    args.retries,
+                    args.verbose,
+                )
+                for url in urls
+            ]
+            for job in futures.as_completed(jobs):
+                try:
+                    url, outcome, ok = job.result()
+                except KeyboardInterrupt:  # pragma: no cover - handled above
+                    raise
+                if ok and outcome:
+                    successes += 1
+                    console.print(f"[OK] {url} -> {outcome}", style="green")
+                else:
+                    failures += 1
+                    console.print(f"[!!] {url} -> {outcome}", style="bold red")
+    except KeyboardInterrupt:
+        console.print("\n[bold yellow]Interrupted by user.")
+        return 130
 
-    print("\n=== Summary ===")
-    print(f"Total: {len(urls)} | Saved: {successes} | Failed/Skipped: {failures}")
+    console.print("\n[bold]=== Summary ===")
+    console.print(f"Total: {len(urls)} | Saved: {successes} | Failed/Skipped: {failures}")
+    return 0
 
-if __name__ == "__main__":
-    main()
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    sys.exit(main())
