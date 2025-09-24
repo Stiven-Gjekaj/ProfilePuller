@@ -85,6 +85,17 @@ python scripts/random_profile_collector.py --domain https://fiber.al/ --max-prof
 - Validates `/profile/` slugs by decoding their payloads so the output only includes real user pages.
 - Pass `--include-posts` to collect `/post/...` URLs (with an optional `--max-posts` limit) alongside
   profiles.
+- Add extra entropy by probing random slugs: `--random-profile-attempts` tries to generate valid
+  Base64 `/profile/` URLs (seeded via `--random-profile-template`—a Fiber example is included by
+  default), while `--random-post-attempts` does the same for `/post/...` IDs (seeded via
+  `--random-post-seed`).
+
+Example combining the random slug generator with post harvesting:
+
+```bash
+python scripts/random_profile_collector.py --include-posts --random-profile-attempts 250 \
+    --random-post-attempts 150 --out random_profiles.txt --obey-robots
+```
 
 ## Embedding & indexing
 
