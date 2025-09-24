@@ -10,7 +10,7 @@ Crawl any single domain to discover random profile URLs and save them.
 Examples:
   python scripts/random_profile_collector.py \
       --seeds https://fiber.al/ \
-      --out random_profiles.txt \
+      --out profiles.txt \
       --max-profiles 200
   python scripts/random_profile_collector.py --resume --state crawl_state.json
   python scripts/random_profile_collector.py --use-playwright
@@ -344,7 +344,7 @@ def build_parser():
     )
     parser.add_argument(
         "--out",
-        default="random_profiles.txt",
+        default="profiles.txt",
         help="Output file for profile URLs.",
     )
     parser.add_argument(
