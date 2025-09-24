@@ -45,7 +45,8 @@ pip install -r requirements.txt
 │   ├── pull_avatar.py
 │   ├── build_index.py
 │   ├── query.py
-│   └── live_search.py
+│   ├── live_search.py
+│   └── random_profile_collector.py
 └── tests/
     └── ...
 ```
@@ -67,6 +68,20 @@ Key flags:
 
 The script uses Rich to colourise `[OK]` and `[!!]` lines while preserving the original output
 format. HTTP 429 responses trigger a polite exponential backoff.
+
+## Random profile discovery (`random_profile_collector.py`)
+
+```bash
+python scripts/random_profile_collector.py --domain https://fiber.al/ --max-profiles 200 \
+    --out random_profiles.txt --obey-robots
+```
+
+- Crawls a single domain, following in-domain links and heuristically recognising profile pages.
+- Supports multiple seed URLs and resumes work via `--state` checkpoint files.
+- Polite by design: adjustable delay/jitter, concurrency cap, robots.txt respect, and optional
+  Playwright fallback for JavaScript-heavy pages (`--use-playwright`).
+- Outputs a shuffled list of profile URLs, truncated to `--max-profiles`, and saves crawl state for
+  later resumption.
 
 ## Embedding & indexing
 

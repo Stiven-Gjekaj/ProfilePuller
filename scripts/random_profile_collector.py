@@ -7,19 +7,18 @@ Crawl any single domain to discover random profile URLs and save them.
 - Resumable via JSON checkpoint
 
 Examples:
-  python random_profile_collector.py --seeds https://fiber.al/ --out random_profiles.txt --max-profiles 200
-  python random_profile_collector.py --resume --state crawl_state.json
-  python random_profile_collector.py --use-playwright
+  python scripts/random_profile_collector.py \
+      --seeds https://fiber.al/ \
+      --out random_profiles.txt \
+      --max-profiles 200
+  python scripts/random_profile_collector.py --resume --state crawl_state.json
+  python scripts/random_profile_collector.py --use-playwright
 
 NOTE: Respect site ToS.
 """
 
-import asyncio
-import aiohttp
-import async_timeout
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
 import argparse
+import asyncio
 import json
 import os
 import random
@@ -27,11 +26,17 @@ import re
 import sys
 import time
 import traceback
+from urllib.parse import urljoin, urlparse
 import urllib.robotparser as robotparser
+
+import aiohttp
+import async_timeout
+from bs4 import BeautifulSoup
 
 # Optional Playwright import deferred until needed
 try:
     from playwright.async_api import async_playwright
+
     HAVE_PLAYWRIGHT = True
 except Exception:
     HAVE_PLAYWRIGHT = False
@@ -39,6 +44,7 @@ except Exception:
 DEFAULT_UA = "Mozilla/5.0 (compatible; RandomProfileCollector/1.1; +https://example.com/bot)"
 
 PROFILE_REGEX = re.compile(r"/profile/[A-Za-z0-9_\-\.=]+", re.IGNORECASE)
+
 
 def normalize(url: str) -> str:
     p = urlparse(url)
@@ -49,11 +55,14 @@ def normalize(url: str) -> str:
         s = s[:-1]
     return s
 
+
 def same_domain(a: str, b: str) -> bool:
     return urlparse(a).netloc == urlparse(b).netloc
 
+
 def link_is_profile(url: str) -> bool:
     return bool(PROFILE_REGEX.search(urlparse(url).path))
+
 
 def extract_links(html: str, base_url: str) -> set[str]:
     soup = BeautifulSoup(html, "html.parser")
@@ -65,17 +74,25 @@ def extract_links(html: str, base_url: str) -> set[str]:
         found.add(urljoin(base_url, href))
     return found
 
+
 def load_state(path: str):
     if not path or not os.path.exists(path):
         return None
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
+
 def save_state(path: str, state: dict):
+    if not path:
+        return
+    directory = os.path.dirname(os.path.abspath(path))
+    if directory and not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
+
 
 async def fetch_http(session: aiohttp.ClientSession, url: str, timeout_s: float) -> str | None:
     try:
@@ -91,6 +108,7 @@ async def fetch_http(session: aiohttp.ClientSession, url: str, timeout_s: float)
                 return None
     except Exception:
         return None
+
 
 async def fetch_with_playwright(url: str, timeout_ms: int = 15000) -> str | None:
     if not HAVE_PLAYWRIGHT:
@@ -108,8 +126,10 @@ async def fetch_with_playwright(url: str, timeout_ms: int = 15000) -> str | None
     except Exception:
         return None
 
+
 async def polite_sleep(min_delay: float, max_jitter: float):
     await asyncio.sleep(min_delay + random.random() * max_jitter)
+
 
 async def crawl(args):
     random.seed(args.seed if args.seed is not None else None)
@@ -146,9 +166,11 @@ async def crawl(args):
     async with aiohttp.ClientSession(connector=conn, timeout=timeout, headers=headers) as session:
         pages_fetched = 0
 
-        while (to_visit and
-               len(discovered_profiles) < args.max_profiles and
-               pages_fetched < args.max_pages):
+        while (
+            to_visit
+            and len(discovered_profiles) < args.max_profiles
+            and pages_fetched < args.max_pages
+        ):
 
             # pick random URL to add randomness to traversal
             url = normalize(to_visit.pop(random.randrange(len(to_visit))))
@@ -168,7 +190,10 @@ async def crawl(args):
             html = await fetch_http(session, url, args.request_timeout)
 
             # Playwright fallback if requested or if empty HTML
-            if (not html or (args.playwright_on_weak and (html.strip() == "" or "<body" not in html.lower()))) and args.use_playwright:
+            if args.use_playwright and (
+                not html
+                or (args.playwright_on_weak and (html.strip() == "" or "<body" not in html.lower()))
+            ):
                 html = await fetch_with_playwright(url)
 
             visited.add(url)
@@ -219,6 +244,10 @@ async def crawl(args):
     random.shuffle(out)
     out = out[: args.max_profiles]
 
+    out_dir = os.path.dirname(os.path.abspath(args.out))
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
     with open(args.out, "w", encoding="utf-8") as f:
         for u in out:
             f.write(u + "\n")
@@ -226,31 +255,116 @@ async def crawl(args):
     print(f"[done] Saved {len(out)} profile URLs to {args.out}")
     print(f"[state] Checkpoint saved at {args.state}")
     if args.use_playwright and not HAVE_PLAYWRIGHT:
-        print("[note] --use-playwright was set but Playwright is not installed. See README/requirements.", file=sys.stderr)
+        print(
+            "[note] --use-playwright was set but Playwright is not installed. "
+            "See README/requirements.",
+            file=sys.stderr,
+        )
 
 
 def build_parser():
-    p = argparse.ArgumentParser(description="Discover random profile links on a domain.")
-    p.add_argument("--seeds", nargs="*", default=["https://fiber.al/"], help="Seed URLs to start crawling from.")
-    p.add_argument("--domain", default="https://fiber.al/", help="Root domain to restrict crawling (scheme+host).")
-    p.add_argument("--out", default="random_profiles.txt", help="Output file for profile URLs.")
-    p.add_argument("--state", default="crawl_state.json", help="Path for checkpoint state JSON.")
-    p.add_argument("--resume", action="store_true", help="Resume from existing checkpoint state.")
-    p.add_argument("--max-profiles", type=int, default=200, help="Max number of profile URLs to collect.")
-    p.add_argument("--max-pages", type=int, default=1000, help="Safety cap on total pages fetched.")
-    p.add_argument("--max-concurrency", type=int, default=6, help="Max concurrent HTTP connections.")
-    p.add_argument("--delay", type=float, default=0.6, help="Base polite delay (seconds) between requests.")
-    p.add_argument("--jitter", type=float, default=0.5, help="Extra random jitter added to delay (seconds).")
-    p.add_argument("--request-timeout", type=float, default=15.0, help="Per-request timeout in seconds.")
-    p.add_argument("--user-agent", default=DEFAULT_UA, help="Custom User-Agent string.")
-    p.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
-    p.add_argument("--obey-robots", action="store_true", help="Respect robots.txt (recommended).")
+    parser = argparse.ArgumentParser(description="Discover random profile links on a domain.")
+    parser.add_argument(
+        "--seeds",
+        nargs="*",
+        default=["https://fiber.al/"],
+        help="Seed URLs to start crawling from.",
+    )
+    parser.add_argument(
+        "--domain",
+        default="https://fiber.al/",
+        help="Root domain to restrict crawling (scheme+host).",
+    )
+    parser.add_argument(
+        "--out",
+        default="random_profiles.txt",
+        help="Output file for profile URLs.",
+    )
+    parser.add_argument(
+        "--state",
+        default="crawl_state.json",
+        help="Path for checkpoint state JSON.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from existing checkpoint state.",
+    )
+    parser.add_argument(
+        "--max-profiles",
+        type=int,
+        default=200,
+        help="Max number of profile URLs to collect.",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=1000,
+        help="Safety cap on total pages fetched.",
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=6,
+        help="Max concurrent HTTP connections.",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.6,
+        help="Base polite delay (seconds) between requests.",
+    )
+    parser.add_argument(
+        "--jitter",
+        type=float,
+        default=0.5,
+        help="Extra random jitter added to delay (seconds).",
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=15.0,
+        help="Per-request timeout in seconds.",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=25,
+        help="Persist crawl state after this many pages (default: 25).",
+    )
+    parser.add_argument(
+        "--user-agent",
+        default=DEFAULT_UA,
+        help="Custom User-Agent string.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility.",
+    )
+    parser.add_argument(
+        "--obey-robots",
+        action="store_true",
+        help="Respect robots.txt (recommended).",
+    )
 
     # Playwright options
-    p.add_argument("--use-playwright", action="store_true", help="Enable Playwright fallback for JS-rendered pages.")
-    p.add_argument("--playwright-on-weak", action="store_true",
-                   help="Only use Playwright when HTML looks empty/weak. If not set, never auto-fallback unless --use-playwright.")
-    return p
+    parser.add_argument(
+        "--use-playwright",
+        action="store_true",
+        help="Enable Playwright fallback for JS-rendered pages.",
+    )
+    parser.add_argument(
+        "--playwright-on-weak",
+        action="store_true",
+        help=(
+            "Only use Playwright when HTML looks empty/weak. "
+            "If not set, never auto-fallback unless --use-playwright."
+        ),
+    )
+    return parser
+
 
 def main():
     parser = build_parser()
@@ -273,6 +387,7 @@ def main():
     except Exception as e:
         print("[fatal]", e, file=sys.stderr)
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()
