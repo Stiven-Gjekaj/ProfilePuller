@@ -76,7 +76,7 @@ python scripts/build_index.py --known faces/known --out-index faiss_index.bin --
 
 Highlights:
 
-- Supports `hog` (CPU) and `cnn` (GPU) models from `face_recognition`.
+- Supports `hog` (CPU, now the default) and `cnn` (GPU) models from `face_recognition`.
 - Two metrics: `cosine` (default, uses `IndexFlatIP`) and `l2` (uses `IndexFlatL2`).
 - Progress bars via `tqdm`, verbose logging via `-v`.
 - Metadata JSON stores metric, dimensionality, count, timestamp, and per-face records.
