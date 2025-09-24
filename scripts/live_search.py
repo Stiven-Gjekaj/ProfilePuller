@@ -6,8 +6,14 @@ import math
 from pathlib import Path
 import sys
 
-import cv2
-import face_recognition as fr
+try:  # pragma: no cover - import resolution
+    import cv2
+except Exception as exc:  # pragma: no cover - library may be missing system deps
+    cv2 = None
+    _CV2_IMPORT_ERROR = exc
+else:  # pragma: no cover - import resolution
+    _CV2_IMPORT_ERROR = None
+
 import faiss
 import numpy as np
 from rich.console import Console
@@ -61,6 +67,25 @@ def load_index_and_meta(index_path: Path, meta_path: Path) -> tuple[faiss.Index,
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+
+    if cv2 is None:
+        console.print(
+            "[red]OpenCV (cv2) is required for live search. "
+            "Install opencv-python-headless or the full OpenCV build."
+        )
+        if _CV2_IMPORT_ERROR:
+            console.print(f"[red]{_CV2_IMPORT_ERROR}")
+        return 1
+
+    try:
+        import face_recognition as fr
+    except Exception as exc:  # pragma: no cover - dependency hinting
+        console.print(
+            "[red]face_recognition is required for live search. "
+            "Install face-recognition and its models (see README)."
+        )
+        console.print(f"[red]{exc}")
+        return 1
 
     try:
         index, meta = load_index_and_meta(args.index, args.meta)

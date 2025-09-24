@@ -82,6 +82,9 @@ python scripts/random_profile_collector.py --domain https://fiber.al/ --max-prof
   Playwright fallback for JavaScript-heavy pages (`--use-playwright`).
 - Outputs a shuffled list of profile URLs, truncated to `--max-profiles`, and saves crawl state for
   later resumption.
+- Validates `/profile/` slugs by decoding their payloads so the output only includes real user pages.
+- Pass `--include-posts` to collect `/post/...` URLs (with an optional `--max-posts` limit) alongside
+  profiles.
 
 ## Embedding & indexing
 

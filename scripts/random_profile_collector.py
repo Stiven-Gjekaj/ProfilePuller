@@ -3,6 +3,7 @@
 Crawl any single domain to discover random profile URLs and save them.
 - Async crawler with polite throttling
 - Playwright fallback for JS-rendered pages
+- Optional `/post/` discovery alongside user profiles
 - CLI with argparse
 - Resumable via JSON checkpoint
 
@@ -13,12 +14,15 @@ Examples:
       --max-profiles 200
   python scripts/random_profile_collector.py --resume --state crawl_state.json
   python scripts/random_profile_collector.py --use-playwright
+  python scripts/random_profile_collector.py --include-posts --max-posts 100
 
 NOTE: Respect site ToS.
 """
 
 import argparse
 import asyncio
+import base64
+import binascii
 import json
 import os
 import random
@@ -26,7 +30,7 @@ import re
 import sys
 import time
 import traceback
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 import urllib.robotparser as robotparser
 
 import aiohttp
@@ -43,7 +47,34 @@ except Exception:
 
 DEFAULT_UA = "Mozilla/5.0 (compatible; RandomProfileCollector/1.1; +https://example.com/bot)"
 
-PROFILE_REGEX = re.compile(r"/profile/[A-Za-z0-9_\-\.=]+", re.IGNORECASE)
+PROFILE_PREFIX = "/profile/"
+POST_REGEX = re.compile(r"/post/[A-Za-z0-9_-]{6,}/?", re.IGNORECASE)
+
+
+def _decode_base64_slug(slug: str) -> dict | None:
+    slug = slug.strip()
+    if not slug:
+        return None
+    # Normalize to standard Base64 with padding
+    normalized = slug
+    padding = (-len(normalized)) % 4
+    if padding:
+        normalized += "=" * padding
+    try:
+        decoded = base64.urlsafe_b64decode(normalized)
+    except (binascii.Error, ValueError):
+        return None
+    try:
+        return json.loads(decoded.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def _looks_like_profile_payload(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    required = {"_id", "name"}
+    return required.issubset(payload.keys())
 
 
 def normalize(url: str) -> str:
@@ -61,7 +92,18 @@ def same_domain(a: str, b: str) -> bool:
 
 
 def link_is_profile(url: str) -> bool:
-    return bool(PROFILE_REGEX.search(urlparse(url).path))
+    path = urlparse(url).path
+    if not path.startswith(PROFILE_PREFIX):
+        return False
+    slug = unquote(path[len(PROFILE_PREFIX) :])
+    if not slug:
+        return False
+    payload = _decode_base64_slug(slug)
+    return _looks_like_profile_payload(payload)
+
+
+def link_is_post(url: str) -> bool:
+    return bool(POST_REGEX.fullmatch(unquote(urlparse(url).path)))
 
 
 def extract_links(html: str, base_url: str) -> set[str]:
@@ -151,6 +193,7 @@ async def crawl(args):
         st = {}
 
     discovered_profiles = set(st.get("discovered_profiles", []))
+    discovered_posts = set(st.get("discovered_posts", []))
     visited = set(st.get("visited", []))
     to_visit = list(st.get("to_visit", []))
 
@@ -166,11 +209,14 @@ async def crawl(args):
     async with aiohttp.ClientSession(connector=conn, timeout=timeout, headers=headers) as session:
         pages_fetched = 0
 
-        while (
-            to_visit
-            and len(discovered_profiles) < args.max_profiles
-            and pages_fetched < args.max_pages
-        ):
+        def needs_more_results() -> bool:
+            if len(discovered_profiles) < args.max_profiles:
+                return True
+            if args.include_posts and len(discovered_posts) < args.max_posts:
+                return True
+            return False
+
+        while to_visit and needs_more_results() and pages_fetched < args.max_pages:
 
             # pick random URL to add randomness to traversal
             url = normalize(to_visit.pop(random.randrange(len(to_visit))))
@@ -212,18 +258,24 @@ async def crawl(args):
                     continue
 
                 if link_is_profile(lk_n):
-                    discovered_profiles.add(lk_n)
-                    if len(discovered_profiles) >= args.max_profiles:
-                        break
-                else:
-                    # queue for crawling if not seen
-                    if lk_n not in visited:
-                        to_visit.append(lk_n)
+                    if len(discovered_profiles) < args.max_profiles:
+                        discovered_profiles.add(lk_n)
+                    continue
+
+                if args.include_posts and link_is_post(lk_n):
+                    if len(discovered_posts) < args.max_posts:
+                        discovered_posts.add(lk_n)
+                    continue
+
+                # queue for crawling if not seen
+                if lk_n not in visited:
+                    to_visit.append(lk_n)
 
             # checkpoint periodically
             if pages_fetched % max(1, args.checkpoint_every) == 0:
                 state_obj = {
                     "discovered_profiles": sorted(discovered_profiles),
+                    "discovered_posts": sorted(discovered_posts),
                     "visited": list(visited),
                     "to_visit": to_visit,
                     "timestamp": int(time.time()),
@@ -233,16 +285,26 @@ async def crawl(args):
     # Final save
     final_state = {
         "discovered_profiles": sorted(discovered_profiles),
+        "discovered_posts": sorted(discovered_posts),
         "visited": list(visited),
         "to_visit": to_visit,
         "timestamp": int(time.time()),
     }
     save_state(args.state, final_state)
 
-    # Write output file (truncate to max_profiles)
-    out = sorted(discovered_profiles)
+    # Write output file (truncate to limits)
+    out_profiles = sorted(discovered_profiles)
+    random.shuffle(out_profiles)
+    out_profiles = out_profiles[: args.max_profiles]
+
+    out_posts: list[str] = []
+    if args.include_posts:
+        out_posts = sorted(discovered_posts)
+        random.shuffle(out_posts)
+        out_posts = out_posts[: args.max_posts]
+
+    out = out_profiles + out_posts
     random.shuffle(out)
-    out = out[: args.max_profiles]
 
     out_dir = os.path.dirname(os.path.abspath(args.out))
     if out_dir and not os.path.exists(out_dir):
@@ -252,8 +314,13 @@ async def crawl(args):
         for u in out:
             f.write(u + "\n")
 
-    print(f"[done] Saved {len(out)} profile URLs to {args.out}")
-    print(f"[state] Checkpoint saved at {args.state}")
+    print(
+        f"[done] Saved {len(out_profiles)} profiles"
+        + (f" and {len(out_posts)} posts" if out_posts else "")
+        + f" to {args.out}"
+    )
+    if args.state:
+        print(f"[state] Checkpoint saved at {args.state}")
     if args.use_playwright and not HAVE_PLAYWRIGHT:
         print(
             "[note] --use-playwright was set but Playwright is not installed. "
@@ -294,7 +361,7 @@ def build_parser():
         "--max-profiles",
         type=int,
         default=200,
-        help="Max number of profile URLs to collect.",
+        help="Max number of verified profile URLs to collect.",
     )
     parser.add_argument(
         "--max-pages",
@@ -349,6 +416,18 @@ def build_parser():
         help="Respect robots.txt (recommended).",
     )
 
+    parser.add_argument(
+        "--include-posts",
+        action="store_true",
+        help="Also collect /post/... URLs in addition to profiles.",
+    )
+    parser.add_argument(
+        "--max-posts",
+        type=int,
+        default=None,
+        help="Max number of post URLs to save (defaults to --max-profiles).",
+    )
+
     # Playwright options
     parser.add_argument(
         "--use-playwright",
@@ -376,6 +455,9 @@ def main():
         print("--domain must include scheme and host, e.g., https://fiber.al/", file=sys.stderr)
         sys.exit(2)
     args.domain = f"{d.scheme}://{d.netloc}"
+
+    if args.max_posts is None:
+        args.max_posts = args.max_profiles
 
     # Basic courtesy warning
     print("Heads-up: Check robots.txt and ToS. Crawl gently. 🍃")
