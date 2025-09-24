@@ -16,3 +16,6 @@ __pycache__/
 # FAISS index artifacts
 faiss_index.bin
 faiss_meta.json
+
+# Large Folders
+faces
