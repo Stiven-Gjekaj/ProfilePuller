@@ -46,7 +46,6 @@ pip install -r requirements.txt
 │   ├── build_index.py
 │   ├── query.py
 │   ├── live_search.py
-│   └── random_profile_collector.py
 └── tests/
     └── ...
 ```
@@ -68,34 +67,6 @@ Key flags:
 
 The script uses Rich to colourise `[OK]` and `[!!]` lines while preserving the original output
 format. HTTP 429 responses trigger a polite exponential backoff.
-
-## Random profile discovery (`random_profile_collector.py`)
-
-```bash
-python scripts/random_profile_collector.py --domain https://fiber.al/ --max-profiles 200 \
-    --out profiles.txt --obey-robots
-```
-
-- Crawls a single domain, following in-domain links and heuristically recognising profile pages.
-- Supports multiple seed URLs and resumes work via `--state` checkpoint files.
-- Polite by design: adjustable delay/jitter, concurrency cap, robots.txt respect, and optional
-  Playwright fallback for JavaScript-heavy pages (`--use-playwright`).
-- Outputs a shuffled list of profile URLs, truncated to `--max-profiles`, and saves crawl state for
-  later resumption.
-- Validates `/profile/` slugs by decoding their payloads so the output only includes real user pages.
-- Pass `--include-posts` to collect `/post/...` URLs (with an optional `--max-posts` limit) alongside
-  profiles.
-- Add extra entropy by probing random slugs: `--random-profile-attempts` tries to generate valid
-  Base64 `/profile/` URLs (seeded via `--random-profile-template`—a Fiber example is included by
-  default), while `--random-post-attempts` does the same for `/post/...` IDs (seeded via
-  `--random-post-seed`).
-
-Example combining the random slug generator with post harvesting:
-
-```bash
-python scripts/random_profile_collector.py --include-posts --random-profile-attempts 250 \
-    --random-post-attempts 150 --out profiles.txt --obey-robots
-```
 
 ## Embedding & indexing
 
